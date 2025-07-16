@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+  web:
+    build: . # Build from the Dockerfile in the current directory
+    ports:
+      - "5000:5000" # Map host port 5000 to container port 5000
+    environment:
+      # These env vars will be passed to your Flask app inside the container
+      DB_HOST: db # 'db' is the service name of our postgres container
+      DB_NAME: todo_db
+      DB_USER: user
+      DB_PASSWORD: password
+    depends_on:
+      - db # Ensure 'db' service starts before 'web'
+    healthcheck: # Basic health check for the web service
+      test: ["CMD-SHELL", "curl -f http://localhost:5000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  db:
+    image: postgres:13-alpine # Use an official PostgreSQL image
+    environment:
+      POSTGRES_DB: todo_db
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5432:5432" # Optional: Map host port 5432 to container port 5432 for local DB tools
+    volumes:
+      - db_data:/var/lib/postgresql/data # Persist database data
+    healthcheck: # Basic health check for the database service
+      test: ["CMD-SHELL", "pg_isready -U user -d todo_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  db_data: # Define the named volume for database persistence
