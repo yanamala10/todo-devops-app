@@ -1,0 +1,79 @@
+name: Build, Push & Deploy Flask To-Do App
+
+on:
+  push:
+    branches:
+      - main # Or 'master', depending on your default branch name
+
+env:
+  # Define environment variables for consistency
+  IMAGE_NAME: todo-flask-app # Name of your application image
+  DOCKER_USERNAME: ${{ secrets.DOCKER_HUB_USERNAME }} # From GitHub Secrets
+  DOCKER_TOKEN: ${{ secrets.DOCKER_TOKEN }}     # From GitHub Secrets
+  KUBE_CONFIG_DATA: ${{ secrets.KUBE_CONFIG_DATA }}   # From GitHub Secrets
+  K8S_NAMESPACE: todo-app-ns # The Kubernetes namespace defined in your manifests
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest # GitHub Actions provides Ubuntu runners
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.9'
+
+    - name: Set up pip and install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+
+    - name: Log in to Docker Hub
+      uses: docker/login-action@v3
+      with:
+        username: ${{ env.DOCKER_USERNAME }}
+        password: ${{ env.DOCKER_TOKEN }}
+
+    - name: Build and Push Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        push: true
+        tags: |
+          ${{ env.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          ${{ env.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:latest
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    - name: Set up Kubeconfig
+      run: |
+        mkdir -p ~/.kube
+        echo "${{ env.KUBE_CONFIG_DATA }}" | base64 -d > ~/.kube/config
+        chmod 600 ~/.kube/config
+
+    - name: Deploy to Kubernetes
+      run: |
+        # Apply manifests in the specified order (namespace first, then secrets, pvc, db, app)
+        # Ensure these paths are correct relative to your project root
+        kubectl apply -f kubernetes/00-namespace.yaml --namespace=${{ env.K8S_NAMESPACE }}
+        kubectl apply -f kubernetes/01-db-secret.yaml --namespace=${{ env.K8S_NAMESPACE }}
+        kubectl apply -f kubernetes/02-db-pvc.yaml --namespace=${{ env.K8S_NAMESPACE }}
+        kubectl apply -f kubernetes/03-db-deployment.yaml --namespace=${{ env.K8S_NAMESPACE }}
+        kubectl apply -f kubernetes/04-db-service.yaml --namespace=${{ env.K8S_NAMESPACE }}
+
+        # --- Dynamic Image Update for App Deployment ---
+        # Patch the application deployment with the new image tag.
+        kubectl set image deployment/todo-flask-app \
+          todo-flask-container=${{ env.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+          --namespace=${{ env.K8S_NAMESPACE }}
+
+        # Apply the app service (can be applied before or after deployment)
+        kubectl apply -f kubernetes/05-app-deployment.yaml --namespace=${{ env.K8S_NAMESPACE }}
+        kubectl apply -f kubernetes/06-app-service.yaml --namespace=${{ env.K8S_NAMESPACE }}
+      env:
+        KUBECONFIG: ~/.kube/config # Ensure kubectl uses this generated config
+      if: success()

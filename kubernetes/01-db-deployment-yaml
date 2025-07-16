@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: todo-db
+  namespace: todo-app-ns # Ensure this matches your namespace
+  labels:
+    app: todo-app
+    tier: database
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: todo-app
+      tier: database
+  template:
+    metadata:
+      labels:
+        app: todo-app
+        tier: database
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:13-alpine
+        env:
+        - name: POSTGRES_DB
+          value: "todo_db"
+        - name: POSTGRES_USER
+          value: "user"
+        - name: POSTGRES_PASSWORD
+          value: "password" # IMPORTANT: Use Kubernetes Secrets in production!
+        ports:
+        - containerPort: 5432
+        volumeMounts:
+        - name: postgres-storage
+          mountPath: /var/lib/postgresql/data
+      volumes:
+      - name: postgres-storage
+        persistentVolumeClaim:
+          claimName: todo-db-pvc
