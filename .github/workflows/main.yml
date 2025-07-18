@@ -1,95 +1,50 @@
-name: Build, Push & Deploy Flask To-Do App
+name: CI with Minikube in GitHub Actions
 
 on:
   push:
     branches:
-      - master # Corrected: Clean branch definition
+      - master # Or main
+  pull_request:
+    branches:
+      - master # Or main
   workflow_dispatch:
 
-env:
-  # Define environment variables for consistency
-  IMAGE_NAME: todo-flask-app # Name of your application image
-  K8S_NAMESPACE: todo-app-ns # The Kubernetes namespace defined in your manifests (e.g., in 00-namespace.yaml)
-
 jobs:
-  build-and-deploy:
-    runs-on: ubuntu-latest # GitHub Actions provides Ubuntu runners
+  build-and-test:
+    runs-on: ubuntu-latest
 
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.9'
-
-    - name: Set up pip and install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-
-    # Setup Buildx with the 'docker-container' driver for advanced caching
-    - name: Set up Docker Buildx
+    - name: Set up Docker BuildX
       uses: docker/setup-buildx-action@v3
-      with:
-        driver: docker-container # IMPORTANT: This enables GHA caching
 
-    # Log in to Docker Hub using GitHub Secrets
-    - name: Log in to Docker Hub
-      uses: docker/login-action@v3
+    - name: Start Minikube
+      uses: medyagh/setup-minikube@latest # This action sets up Minikube on the runner VM
       with:
-        username: ${{ secrets.DOCKER_HUB_USERNAME }}
-        password: ${{ secrets.DOCKER_HUB_TOKEN }} # Ensure this secret name matches what you set
+        minikube-version: 'latest' # Or a specific version like 'v1.32.0'
 
-    # Build and Push Docker image to Docker Hub
-    - name: Build and Push Docker image
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        push: true
-        tags: |
-          ${{ secrets.DOCKER_HUB_USERNAME }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
-          ${{ secrets.DOCKER_HUB_USERNAME }}/${{ env.IMAGE_NAME }}:latest
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
-
-    # Set up Kubeconfig from GitHub Secret for kubectl
-    - name: Set up Kubeconfig
+    - name: Configure Docker to use Minikube's Docker daemon
       run: |
-        mkdir -p ~/.kube
-        echo "${{ secrets.KUBE_CONFIG_DATA }}" | base64 -d > ~/.kube/config
-        cat ~/.kube/config # Add this line to print the decoded content
-        # chmod 600 ~/.kube/config # Comment out for now
-    # Deploy application to Kubernetes
-    - name: Deploy to Kubernetes
+        eval $(minikube docker-env) # This command sets environment variables for Docker to use Minikube's daemon
+
+    - name: Build Docker image inside Minikube's Docker daemon
       run: |
-        # Explicitly export KUBECONFIG for all subsequent kubectl commands in this step
-        export KUBECONFIG=~/.kube/config
-        
-        # Verify kubectl can connect (optional, but good for debugging)
-        kubectl cluster-info || true # Add || true to prevent job failure if cluster-info itself has warnings
+        docker build -t my-app:latest . # Builds image directly into Minikube's image cache
 
-        # Apply manifests in the specified order (namespace first, then secrets, pvc, db, app)
-        # Ensure these paths are correct relative to your project root
-        kubectl apply -f kubernetes/00-namespace.yaml --namespace=${{ env.K8S_NAMESPACE }}
-        kubectl apply -f kubernetes/01-db-secret.yaml --namespace=${{ env.K8S_NAMESPACE }}
-        kubectl apply -f kubernetes/02-db-pvc.yaml --namespace=${{ env.K8S_NAMESPACE }}
-        kubectl apply -f kubernetes/03-db-deployment.yaml --namespace=${{ env.K8S_NAMESPACE }}
-        kubectl apply -f kubernetes/04-db-service.yaml --namespace=${{ env.K8S_NAMESPACE }}
+    - name: Deploy to Minikube
+      run: |
+        kubectl apply -f k8s/deployment.yaml # Your Kubernetes deployment manifest
+        kubectl apply -f k8s/service.yaml # Your Kubernetes service manifest
+        kubectl wait --for=condition=ready pod -l app=my-app --timeout=300s # Wait for pods to be ready
 
-        # Apply the app deployment and service first.
-        # The 'kubectl set image' command (below) will then update its image.
-        kubectl apply -f kubernetes/05-app-deployment.yaml --namespace=${{ env.K8S_NAMESPACE }}
-        kubectl apply -f kubernetes/06-app-service.yaml --namespace=${{ env.K8S_NAMESPACE }}
+    - name: Test Minikube Service Access (Internal to Runner)
+      run: |
+        # Get the NodePort URL for your service from the temporary Minikube
+        # Replace 'my-app-service' with the actual name of your Kubernetes service
+        SERVICE_URL=$(minikube service my-app-service --url)
+        echo "Service URL in Minikube: $SERVICE_URL"
         
-        # Patch the application deployment with the newly built image tag.
-        # The container name 'todo-flask-container' must match your 05-app-deployment.yaml
-        kubectl set image deployment/todo-flask-app \
-          todo-flask-container=${{ secrets.DOCKER_HUB_USERNAME }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
-          --namespace=${{ env.K8S_NAMESPACE }}
-        
-        # Wait for the deployment to roll out completely
-        kubectl rollout status deployment/todo-flask-app --namespace=${{ env.K8S_NAMESPACE }} --timeout=5m
-      # This 'if: success()' condition applies to the entire 'Deploy to Kubernetes' step.
-      if: success()
+        # Curl the service to ensure it's reachable and responding
+        curl --fail --show-error $SERVICE_URL

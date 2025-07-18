@@ -1,91 +1,44 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: todo-flask-app
-  namespace: todo-app-ns
-  labels:
-    app: todo-app
-    tier: web
+  name: todo-flask-app       # Name of your application deployment
+  namespace: todo-app-ns    # IMPORTANT: Must match the namespace defined in 00-namespace.yaml
+                            # and the K8S_NAMESPACE environment variable in your main.yml
 spec:
-  replicas: 2 # You can scale this up!
+  replicas: 1               # Number of pods (instances) for your application
   selector:
     matchLabels:
-      app: todo-app
-      tier: web
+      app: todo-flask-app   # Selector to link deployment to pods
   template:
     metadata:
       labels:
-        app: todo-app
-        tier: web
+        app: todo-flask-app # Labels for the pods
     spec:
-      # initContainers run to completion before any regular containers in the Pod start.
-      # Ideal for database migrations or schema initialization.
-      initContainers:
-      - name: init-db-schema
-        image: YOUR_DOCKER_HUB_USERNAME/todo-flask-app:latest # Use the same app image you build
-        command: ["python", "-c", "import app; app.init_db();"] # Execute init_db function
-        env: # Must pass the same database connection environment variables
-        - name: DB_HOST
-          value: "db" # Points to the Kubernetes Service named 'db'
-        - name: DB_NAME
-          valueFrom:
-            secretKeyRef:
-              name: todo-db-secret
-              key: POSTGRES_DB
-        - name: DB_USER
-          valueFrom:
-            secretKeyRef:
-              name: todo-db-secret
-              key: POSTGRES_USER
-        - name: DB_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: todo-db-secret
-              key: POSTGRES_PASSWORD
-        # It's good practice to wait for the DB to be ready before running init_db.
-        # The app.init_db() has internal retries, but an initContainer could also
-        # have its own startup probe or sleep if needed.
       containers:
-      - name: todo-flask-container
-        image: YOUR_DOCKER_HUB_USERNAME/todo-flask-app:latest # IMPORTANT: Replace with your actual Docker Hub username!
+      - name: todo-flask-container # IMPORTANT: This must match the container name
+                                   # used in the 'kubectl set image' command in main.yml
+        image: my-app:latest       # The image name and tag built locally by Minikube's Docker daemon
+        imagePullPolicy: Never     # CRUCIAL for Minikube CI: Don't pull from remote registry
         ports:
-        - containerPort: 5000
-        env:
-        - name: DB_HOST
-          value: "db" # This is the Kubernetes service name for your DB
-        - name: DB_NAME
+        - containerPort: 8080      # The port your Flask application listens on (e.g., Gunicorn bind port)
+        env: # Example: Environment variables for your Flask app to connect to the DB
+        - name: DATABASE_HOST      # Name of environment variable in your Flask app
+          value: todo-db-service   # Name of your database Kubernetes Service (e.g., from 04-db-service.yaml)
+        - name: DATABASE_USER
           valueFrom:
             secretKeyRef:
-              name: todo-db-secret
-              key: POSTGRES_DB
-        - name: DB_USER
+              name: db-credentials # Name of your Kubernetes Secret (from 01-db-secret.yaml)
+              key: username        # Key within the Secret
+        - name: DATABASE_PASSWORD
           valueFrom:
             secretKeyRef:
-              name: todo-db-secret
-              key: POSTGRES_USER
-        - name: DB_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: todo-db-secret
-              key: POSTGRES_PASSWORD
-        livenessProbe: # Kubernetes checks if the app is still running
-          httpGet:
-            path: /health
-            port: 5000
-          initialDelaySeconds: 30 # Give time for initContainer + app startup
-          periodSeconds: 10
-          failureThreshold: 3
-        readinessProbe: # Kubernetes checks if the app is ready to receive traffic
-          httpGet:
-            path: /health
-            port: 5000
-          initialDelaySeconds: 40 # Longer delay to ensure full readiness
-          periodSeconds: 10
-          failureThreshold: 3
-        resources: # Basic resource requests/limits (good practice)
+              name: db-credentials
+              key: password
+        # Add resource limits, probes, etc., if desired
+        resources:
           requests:
-            cpu: "100m" # 0.1 CPU core
-            memory: "128Mi" # 128 Megabytes
+            cpu: "100m"
+            memory: "128Mi"
           limits:
-            cpu: "500m"
-            memory: "512Mi"
+            cpu: "200m"
+            memory: "256Mi"
