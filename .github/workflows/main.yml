@@ -11,7 +11,7 @@ on:
 
 env:
   # Define environment variables for consistency
-  IMAGE_NAME: my-app # This should match the image name you build in Dockerfile
+  IMAGE_NAME: my-app # This should match the image name you build in Dockerfile and use in your deployment manifest
   K8S_NAMESPACE: todo-app-ns # The Kubernetes namespace defined in your manifests (e.g., in 00-namespace.yaml)
 
 jobs:
@@ -22,7 +22,17 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Set up Docker Buildx
+    - name: Set up Python # Only needed if you run Python tests or dependencies directly in the workflow
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.9' # Or your specific Python version
+
+    - name: Set up pip and install dependencies # Only needed if you run Python tests directly
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Set up Docker Buildx # Used for building Docker images (even with Minikube daemon)
       uses: docker/setup-buildx-action@v3
       with:
         driver: docker-container # IMPORTANT: This enables GHA caching
@@ -31,50 +41,77 @@ jobs:
     - name: Start Minikube
       uses: medyagh/setup-minikube@latest
       with:
-        minikube-version: 'latest' # Or a specific version like 'v1.32.0'
+        minikube-version: 'latest' # Or a specific stable version like 'v1.32.0'
 
     # Configure Docker to use Minikube's Docker daemon
     - name: Configure Docker to use Minikube's Docker daemon
       run: |
-        eval $(minikube docker-env) # This command sets environment variables for Docker to use Minikube's daemon
+        # This command sets environment variables (DOCKER_HOST, etc.) for Docker commands
+        # to interact with the Minikube internal daemon.
+        eval $(minikube docker-env)
 
     # Build Docker image directly into Minikube's image cache
     - name: Build Docker image inside Minikube's Docker daemon
       run: |
-        # The tag here (my-app:latest) must match the image: field in your deployment manifest
+        # The tag here (${{ env.IMAGE_NAME }}:latest) must match the image: field
+        # in your kubernetes/05-app-deployment.yaml and use imagePullPolicy: Never
         docker build -t ${{ env.IMAGE_NAME }}:latest .
 
     # Deploy application to Minikube
     - name: Deploy to Minikube
       run: |
-        # No need for KUBECONFIG export here, as medyagh/setup-minikube sets it up
-        # The path 'kubernetes/' must exist and contain your YAML files.
-        # Ensure filenames match your actual files (e.g., 00-namespace.yaml, 01-db-secret.yaml etc.)
+        # No need for KUBECONFIG export here, as medyagh/setup-minikube action handles it.
 
-        # Create/apply namespace first
+        # Ensure these paths are correct relative to your project root.
+        # They should point to files inside the 'kubernetes/' directory.
+
+        # Apply manifests in the specified order (namespace first, then secrets, pvc, db, app)
         kubectl apply -f kubernetes/00-namespace.yaml --namespace=${{ env.K8S_NAMESPACE }}
-
-        # Apply database related manifests
         kubectl apply -f kubernetes/01-db-secret.yaml --namespace=${{ env.K8S_NAMESPACE }}
         kubectl apply -f kubernetes/02-db-pvc.yaml --namespace=${{ env.K8S_NAMESPACE }}
         kubectl apply -f kubernetes/03-db-deployment.yaml --namespace=${{ env.K8S_NAMESPACE }}
         kubectl apply -f kubernetes/04-db-service.yaml --namespace=${{ env.K8S_NAMESPACE }}
 
-        # Apply application deployment and service
         kubectl apply -f kubernetes/05-app-deployment.yaml --namespace=${{ env.K8S_NAMESPACE }}
         kubectl apply -f kubernetes/06-app-service.yaml --namespace=${{ env.K8S_NAMESPACE }}
         
+        # --- START DEBUGGING COMMANDS (VERY IMPORTANT FOR TROUBLESHOOTING ROLLOUT) ---
+        echo "--- Describing todo-flask-app Deployment ---"
+        kubectl describe deployment todo-flask-app --namespace=${{ env.K8S_NAMESPACE }}
+
+        echo "--- Getting Pods in todo-app-ns Namespace (all statuses) ---"
+        # Get detailed pod info, including status, restarts, and ready state
+        kubectl get pods --namespace=${{ env.K8S_NAMESPACE }} -o wide
+
+        echo "--- Describing todo-flask-app Pods (attempting to get details) ---"
+        # Get the name of the 'todo-flask-app' pod(s). This might be tricky if it's crashing.
+        # We try to get the first one, or just print a message if none found.
+        # Using a timeout for 'get pods' to ensure it doesn't hang indefinitely if no pods appear.
+        POD_NAME=$(kubectl get pods -l app=todo-flask-app --namespace=${{ env.K8S_NAMESPACE }} -o jsonpath='{.items[0].metadata.name}' --field-selector=status.phase!=Succeeded,status.phase!=Failed --request-timeout=15s 2>/dev/null || echo "")
+
+        if [ -n "$POD_NAME" ]; then
+          echo "Found pod: $POD_NAME"
+          kubectl describe pod $POD_NAME --namespace=${{ env.K8S_NAMESPACE }}
+          echo "--- Logs for todo-flask-app Pod ($POD_NAME) ---"
+          kubectl logs $POD_NAME --namespace=${{ env.K8S_NAMESPACE }}
+          # Also get logs from previous instances if the pod is restarting (CrashLoopBackOff)
+          echo "--- Logs for previous instance of todo-flask-app Pod ($POD_NAME) (if available) ---"
+          kubectl logs $POD_NAME --namespace=${{ env.K8S_NAMESPACE }} --previous || true
+        else
+          echo "No 'todo-flask-app' pods found yet or pods are not in a Running/Pending/Error state for detailed description/logs."
+        fi
+        echo "--- END DEBUGGING COMMANDS ---"
+
         # Patch the application deployment with the newly built image tag.
-        # Ensure 'todo-flask-app' matches the name of your Deployment resource (from 05-app-deployment.yaml)
-        # Ensure 'todo-flask-container' matches the name: of your container in the deployment (from 05-app-deployment.yaml)
-        # The image tag ${{ env.IMAGE_NAME }}:latest must match the one built above.
+        # 'todo-flask-app' is the Deployment name from 05-app-deployment.yaml
+        # 'todo-flask-container' is the container 'name:' inside your 05-app-deployment.yaml
         kubectl set image deployment/todo-flask-app \
           todo-flask-container=${{ env.IMAGE_NAME }}:latest \
           --namespace=${{ env.K8S_NAMESPACE }}
         
         # Wait for the deployment to roll out completely
         kubectl rollout status deployment/todo-flask-app --namespace=${{ env.K8S_NAMESPACE }} --timeout=5m
-      if: success() # Only run this step if all previous steps succeeded
+      if: success() # Only run this step if all previous apply commands succeeded
 
     # Test Minikube Service Access (Internal to Runner)
     - name: Test Minikube Service Access (Internal to Runner)
@@ -85,5 +122,6 @@ jobs:
         echo "Service URL in Minikube: $SERVICE_URL"
         
         # Curl the service to ensure it's reachable and responding
-        # Using a timeout for curl and retries for robustness in CI
-        curl -vvv --fail --show-error --retry 5 --retry-delay 5 $SERVICE_URL
+        # Using --retry and --retry-delay for robustness in CI as services might take a moment to be fully ready
+        curl -vvv --fail --show-error --retry 10 --retry-delay 5 $SERVICE_URL
+      if: success() # Only run tests if deployment was successful
