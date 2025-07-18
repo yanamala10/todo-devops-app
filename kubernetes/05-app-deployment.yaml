@@ -21,20 +21,24 @@ spec:
         imagePullPolicy: Never     # CRUCIAL for Minikube CI: Don't pull from remote registry
         ports:
         - containerPort: 8080      # The port your Flask application listens on (e.g., Gunicorn bind port)
-        env: # Example: Environment variables for your Flask app to connect to the DB
-        - name: DATABASE_HOST      # Name of environment variable in your Flask app
+        env: # Environment variables for your Flask app to connect to the DB
+        # This will set the DATABASE_HOST environment variable in your Flask container
+        - name: DATABASE_HOST
           value: todo-db-service   # Name of your database Kubernetes Service (e.g., from 04-db-service.yaml)
+        # These will get DATABASE_USER from the todo-db-secret
         - name: DATABASE_USER
           valueFrom:
             secretKeyRef:
-              name: db-credentials # Name of your Kubernetes Secret (from 01-db-secret.yaml)
-              key: username        # Key within the Secret
+              name: todo-db-secret # <--- CORRECTED: This must match the name of your Secret
+              key: POSTGRES_USER   # <--- CORRECTED: This must match the key in your Secret
+        # These will get DATABASE_PASSWORD from the todo-db-secret
         - name: DATABASE_PASSWORD
           valueFrom:
             secretKeyRef:
-              name: db-credentials
-              key: password
-        # Add resource limits, probes, etc., if desired
+              name: todo-db-secret # <--- CORRECTED: This must match the name of your Secret
+              key: POSTGRES_PASSWORD # <--- CORRECTED: This must match the key in your Secret
+
+        # Add resource limits, probes, etc., if desired (assuming these are correctly indented)
         resources:
           requests:
             cpu: "100m"
@@ -42,3 +46,17 @@ spec:
           limits:
             cpu: "200m"
             memory: "256Mi"
+
+        # Example probes - ensure these are correctly indented under 'containers'
+        # livenessProbe:
+        #   httpGet:
+        #     path: /health
+        #     port: 8080
+        #   initialDelaySeconds: 15
+        #   periodSeconds: 10
+        # readinessProbe:
+        #   httpGet:
+        #     path: /ready
+        #     port: 8080
+        #   initialDelaySeconds: 5
+        #   periodSeconds: 5
