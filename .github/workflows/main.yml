@@ -22,17 +22,17 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Set up Python # Only needed if you run Python tests or dependencies directly in the workflow
+    - name: Set up Python # Needed if you run Python tests or install dependencies directly in the workflow
       uses: actions/setup-python@v5
       with:
         python-version: '3.9' # Or your specific Python version
 
-    - name: Set up pip and install dependencies # Only needed if you run Python tests directly
+    - name: Set up pip and install dependencies # Needed if you run Python tests directly or for Gunicorn in custom build steps
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-    - name: Set up Docker Buildx # Used for building Docker images (even with Minikube daemon)
+    - name: Set up Docker Buildx # Used for building Docker images
       uses: docker/setup-buildx-action@v3
       with:
         driver: docker-container # IMPORTANT: This enables GHA caching
@@ -43,25 +43,23 @@ jobs:
       with:
         minikube-version: 'latest' # Or a specific stable version like 'v1.32.0'
 
-    # Configure Docker to use Minikube's Docker daemon
-    - name: Configure Docker to use Minikube's Docker daemon
+    # Build Docker image on the GitHub Actions runner's default Docker daemon
+    - name: Build Docker image
       run: |
-        # This command sets environment variables (DOCKER_HOST, etc.) for Docker commands
-        # to interact with the Minikube internal daemon.
-        eval $(minikube docker-env)
-
-    # Build Docker image directly into Minikube's image cache
-    - name: Build Docker image inside Minikube's Docker daemon
-      run: |
+        # Build the image using the runner's default Docker daemon
         # The tag here (${{ env.IMAGE_NAME }}:latest) must match the image: field
         # in your kubernetes/05-app-deployment.yaml and use imagePullPolicy: Never
         docker build -t ${{ env.IMAGE_NAME }}:latest .
 
+    # Load the built Docker image into Minikube's internal Docker daemon
+    - name: Load image into Minikube
+      run: |
+        minikube image load ${{ env.IMAGE_NAME }}:latest
+
     # Deploy application to Minikube
-    - name: Deploy to Minikube
+    - name: Deploy to Kubernetes
       run: |
         # No need for KUBECONFIG export here, as medyagh/setup-minikube action handles it.
-
         # Ensure these paths are correct relative to your project root.
         # They should point to files inside the 'kubernetes/' directory.
 
