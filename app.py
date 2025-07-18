@@ -45,7 +45,7 @@ def health_check():
     try:
         conn = get_db_connection()
         conn.close()
-        return jsonify({"status": "OK", "database_connection": "successful"}), 200
+        return jsonify({"status": "OK", "database_connection": "successful", "version": "1.3"}), 200
     except Exception as e:
         return jsonify({"status": "ERROR", "database_connection": f"failed: {e}"}), 500
 

@@ -3,7 +3,7 @@ name: Build, Push & Deploy Flask To-Do App
 on:
   push:
     branches:
-      - main# Or 'master', depending on your default branch name
+      - master# Or 'master', depending on your default branch name
   workflow_dispatch: # Or 'master', depending on your default branch name
 
 env:
