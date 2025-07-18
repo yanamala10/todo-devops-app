@@ -58,10 +58,9 @@ jobs:
     - name: Set up Kubeconfig
       run: |
         mkdir -p ~/.kube
-        # Decode the base64 Kubeconfig data from secrets and save it
         echo "${{ secrets.KUBE_CONFIG_DATA }}" | base64 -d > ~/.kube/config
-        chmod 600 ~/.kube/config # Set appropriate permissions
-
+        cat ~/.kube/config # Add this line to print the decoded content
+        # chmod 600 ~/.kube/config # Comment out for now
     # Deploy application to Kubernetes
     - name: Deploy to Kubernetes
       run: |
