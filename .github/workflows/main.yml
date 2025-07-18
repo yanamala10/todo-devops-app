@@ -3,17 +3,13 @@ name: Build, Push & Deploy Flask To-Do App
 on:
   push:
     branches:
-      - master # Corrected: Removed the comment on the same line, which can break YAML
-  workflow_dispatch: # This is correctly placed now
+      - master # Corrected: Clean branch definition
+  workflow_dispatch:
 
 env:
   # Define environment variables for consistency
   IMAGE_NAME: todo-flask-app # Name of your application image
-  # Corrected: Referencing secrets directly in steps is often better for security
-  # and avoids issues if env vars are overridden or not fully passed to actions.
-  # For Docker login, it's common practice to use secrets directly in the action's 'with' block.
-  # If you prefer env vars, ensure DOCKER_TOKEN matches your secret name DOCKER_HUB_TOKEN
-  K8S_NAMESPACE: todo-app-ns # The Kubernetes namespace defined in your manifests
+  K8S_NAMESPACE: todo-app-ns # The Kubernetes namespace defined in your manifests (e.g., in 00-namespace.yaml)
 
 jobs:
   build-and-deploy:
@@ -33,20 +29,20 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-    # Corrected: Add the setup-buildx-action with the container driver
+    # Setup Buildx with the 'docker-container' driver for advanced caching
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
       with:
-        driver: docker-container # <--- ADD THIS LINE HERE
+        driver: docker-container # IMPORTANT: This enables GHA caching
 
+    # Log in to Docker Hub using GitHub Secrets
     - name: Log in to Docker Hub
       uses: docker/login-action@v3
       with:
-        # Corrected: Referencing secrets directly from the secrets context here
-        # This is the most reliable way for this action.
         username: ${{ secrets.DOCKER_HUB_USERNAME }}
-        password: ${{ secrets.DOCKER_HUB_TOKEN }} # Assuming your secret is named DOCKER_HUB_TOKEN
+        password: ${{ secrets.DOCKER_HUB_TOKEN }} # Ensure this secret name matches what you set
 
+    # Build and Push Docker image to Docker Hub
     - name: Build and Push Docker image
       uses: docker/build-push-action@v5
       with:
@@ -58,60 +54,43 @@ jobs:
         cache-from: type=gha
         cache-to: type=gha,mode=max
 
+    # Set up Kubeconfig from GitHub Secret for kubectl
     - name: Set up Kubeconfig
       run: |
         mkdir -p ~/.kube
-        # Corrected: Use secrets.KUBE_CONFIG_DATA directly as env.KUBE_CONFIG_DATA was removed above
-        # Also, ensure base64 -d works. If it's on Windows runner for some reason, it might need 'certutil'
-        # But for ubuntu-latest, base64 -d is correct.
+        # Decode the base64 Kubeconfig data from secrets and save it
         echo "${{ secrets.KUBE_CONFIG_DATA }}" | base64 -d > ~/.kube/config
-        chmod 600 ~/.kube/config
+        chmod 600 ~/.kube/config # Set appropriate permissions
 
+    # Deploy application to Kubernetes
     - name: Deploy to Kubernetes
       run: |
+        # Explicitly export KUBECONFIG for all subsequent kubectl commands in this step
+        export KUBECONFIG=~/.kube/config
+        
+        # Verify kubectl can connect (optional, but good for debugging)
+        kubectl cluster-info || true # Add || true to prevent job failure if cluster-info itself has warnings
+
         # Apply manifests in the specified order (namespace first, then secrets, pvc, db, app)
         # Ensure these paths are correct relative to your project root
-        kubectl apply -f kubernetes/00-namespace.yaml
-        kubectl apply -f kubernetes/01-db-secret.yaml
-        kubectl apply -f kubernetes/02-db-pvc.yaml
-        kubectl apply -f kubernetes/03-db-deployment.yaml
-        kubectl apply -f kubernetes/04-db-service.yaml
+        kubectl apply -f kubernetes/00-namespace.yaml --namespace=${{ env.K8S_NAMESPACE }}
+        kubectl apply -f kubernetes/01-db-secret.yaml --namespace=${{ env.K8S_NAMESPACE }}
+        kubectl apply -f kubernetes/02-db-pvc.yaml --namespace=${{ env.K8S_NAMESPACE }}
+        kubectl apply -f kubernetes/03-db-deployment.yaml --namespace=${{ env.K8S_NAMESPACE }}
+        kubectl apply -f kubernetes/04-db-service.yaml --namespace=${{ env.K8S_NAMESPACE }}
 
-        # --- Dynamic Image Update for App Deployment ---
-        # Patch the application deployment with the new image tag.
-        # This command should use the correct image name variable and Docker username directly from secrets
-        kubectl set image deployment/todo-flask-app \
-          todo-flask-container=${{ secrets.DOCKER_HUB_USERNAME }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
-          --namespace=${{ env.K8S_NAMESPACE }}
-
-        # Apply the app deployment (THIS MUST BE APPLIED BEFORE THE PATCH IF IT'S THE FIRST DEPLOYMENT)
-        # If the deployment doesn't exist, 'kubectl set image' will fail.
-        # It's safer to apply the deployment first, then patch for updates.
-        # However, it's *even better* to let the 'kubectl apply' handle the image update
-        # by having the correct image tag in the YAML template itself.
-        # For simplicity, if this is a first run, apply the deployment fully.
-        # For subsequent runs, the 'set image' will update it.
-
-        # Corrected: Apply the app deployment with the correct image tag directly.
-        # This is safer than apply then patch immediately.
-        # This requires your 05-app-deployment.yaml to use a variable for image or have a placeholder.
-        # A more robust way to handle dynamic images:
-        # Option A: Use sed to replace the image placeholder in the YAML before applying.
-        # Option B: Use 'kustomize' if your project grows.
-        # For now, let's assume 05-app-deployment.yaml gets its image from `kubectl set image`.
-        # However, the previous order was problematic if the deployment didn't exist.
-
-        # Let's adjust the deploy steps for clarity and robustness:
-        # First deploy the app manifest (it might have an old image, or a placeholder)
+        # Apply the app deployment and service first.
+        # The 'kubectl set image' command (below) will then update its image.
         kubectl apply -f kubernetes/05-app-deployment.yaml --namespace=${{ env.K8S_NAMESPACE }}
         kubectl apply -f kubernetes/06-app-service.yaml --namespace=${{ env.K8S_NAMESPACE }}
-
-        # Then, immediately patch the deployment with the new image tag.
-        # This assumes your container name inside the deployment is 'todo-flask-container'
+        
+        # Patch the application deployment with the newly built image tag.
+        # The container name 'todo-flask-container' must match your 05-app-deployment.yaml
         kubectl set image deployment/todo-flask-app \
           todo-flask-container=${{ secrets.DOCKER_HUB_USERNAME }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
           --namespace=${{ env.K8S_NAMESPACE }}
-
-      env:
-        KUBECONFIG: ~/.kube/config # Ensure kubectl uses this generated config
-      if: success() # This condition is applied to the entire 'Deploy to Kubernetes' step
+        
+        # Wait for the deployment to roll out completely
+        kubectl rollout status deployment/todo-flask-app --namespace=${{ env.K8S_NAMESPACE }} --timeout=5m
+      # This 'if: success()' condition applies to the entire 'Deploy to Kubernetes' step.
+      if: success()
