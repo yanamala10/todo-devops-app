@@ -1,0 +1,91 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: todo-flask-app
+  namespace: todo-app-ns
+  labels:
+    app: todo-app
+    tier: web
+spec:
+  replicas: 2 # You can scale this up!
+  selector:
+    matchLabels:
+      app: todo-app
+      tier: web
+  template:
+    metadata:
+      labels:
+        app: todo-app
+        tier: web
+    spec:
+      # initContainers run to completion before any regular containers in the Pod start.
+      # Ideal for database migrations or schema initialization.
+      initContainers:
+      - name: init-db-schema
+        image: YOUR_DOCKER_HUB_USERNAME/todo-flask-app:latest # Use the same app image you build
+        command: ["python", "-c", "import app; app.init_db();"] # Execute init_db function
+        env: # Must pass the same database connection environment variables
+        - name: DB_HOST
+          value: "db" # Points to the Kubernetes Service named 'db'
+        - name: DB_NAME
+          valueFrom:
+            secretKeyRef:
+              name: todo-db-secret
+              key: POSTGRES_DB
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: todo-db-secret
+              key: POSTGRES_USER
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: todo-db-secret
+              key: POSTGRES_PASSWORD
+        # It's good practice to wait for the DB to be ready before running init_db.
+        # The app.init_db() has internal retries, but an initContainer could also
+        # have its own startup probe or sleep if needed.
+      containers:
+      - name: todo-flask-container
+        image: YOUR_DOCKER_HUB_USERNAME/todo-flask-app:latest # IMPORTANT: Replace with your actual Docker Hub username!
+        ports:
+        - containerPort: 5000
+        env:
+        - name: DB_HOST
+          value: "db" # This is the Kubernetes service name for your DB
+        - name: DB_NAME
+          valueFrom:
+            secretKeyRef:
+              name: todo-db-secret
+              key: POSTGRES_DB
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: todo-db-secret
+              key: POSTGRES_USER
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: todo-db-secret
+              key: POSTGRES_PASSWORD
+        livenessProbe: # Kubernetes checks if the app is still running
+          httpGet:
+            path: /health
+            port: 5000
+          initialDelaySeconds: 30 # Give time for initContainer + app startup
+          periodSeconds: 10
+          failureThreshold: 3
+        readinessProbe: # Kubernetes checks if the app is ready to receive traffic
+          httpGet:
+            path: /health
+            port: 5000
+          initialDelaySeconds: 40 # Longer delay to ensure full readiness
+          periodSeconds: 10
+          failureThreshold: 3
+        resources: # Basic resource requests/limits (good practice)
+          requests:
+            cpu: "100m" # 0.1 CPU core
+            memory: "128Mi" # 128 Megabytes
+          limits:
+            cpu: "500m"
+            memory: "512Mi"

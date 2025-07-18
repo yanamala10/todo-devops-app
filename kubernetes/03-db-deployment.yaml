@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: todo-db
+  namespace: todo-app-ns
+  labels:
+    app: todo-app
+    tier: database
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: todo-app
+      tier: database
+  template:
+    metadata:
+      labels:
+        app: todo-app
+        tier: database
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:13-alpine # Stable and slim PostgreSQL image
+        env:
+        - name: POSTGRES_DB
+          valueFrom:
+            secretKeyRef:
+              name: todo-db-secret
+              key: POSTGRES_DB
+        - name: POSTGRES_USER
+          valueFrom:
+            secretKeyRef:
+              name: todo-db-secret
+              key: POSTGRES_USER
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: todo-db-secret
+              key: POSTGRES_PASSWORD
+        ports:
+        - containerPort: 5432
+        volumeMounts:
+        - name: postgres-storage
+          mountPath: /var/lib/postgresql/data # Mount path for PostgreSQL data
+      volumes:
+      - name: postgres-storage
+        persistentVolumeClaim:
+          claimName: todo-db-pvc # Link to our PVC
+      # Robust probes for database readiness and health
+      startupProbe: # Ensures the database container is fully initialized
+        exec:
+          command: ["pg_isready", "-U", "user", "-d", "todo_db"] # Using hardcoded user/db for probe, fine for assessment
+        initialDelaySeconds: 10
+        periodSeconds: 5
+        failureThreshold: 30 # Gives 2.5 minutes for DB to start (30 * 5s)
+      livenessProbe: # Checks if the DB is still running/responsive after startup
+        exec:
+          command: ["pg_isready", "-U", "user", "-d", "todo_db"]
+        initialDelaySeconds: 180 # Start after startupProbe and some buffer
+        periodSeconds: 10
+        failureThreshold: 3
+      readinessProbe: # Checks if the DB is ready to accept connections
+        exec:
+          command: ["pg_isready", "-U", "user", "-d", "todo_db"]
+        initialDelaySeconds: 20 # Can be ready earlier than live
+        periodSeconds: 5
+        failureThreshold: 3

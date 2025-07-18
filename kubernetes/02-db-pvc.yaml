@@ -5,7 +5,7 @@ metadata:
   namespace: todo-app-ns
 spec:
   accessModes:
-    - ReadWriteOnce
+    - ReadWriteOnce # Means the volume can be mounted as read-write by a single node
   resources:
     requests:
-      storage: 1Gi # Request 1GB of storage
+      storage: 1Gi # Request 1GB of storage for the database
