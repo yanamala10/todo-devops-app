@@ -1,31 +1,29 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: todo-db
-  namespace: todo-app-ns
-  labels:
-    app: todo-app
-    tier: database
+  name: todo-db-deployment      # Name of your database deployment
+  namespace: todo-app-ns       # Must match your application's namespace
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: todo-app
-      tier: database
+      app: todo-db             # Selector for database pods
   template:
     metadata:
       labels:
-        app: todo-app
-        tier: database
+        app: todo-db
     spec:
       containers:
-      - name: postgres
-        image: postgres:13-alpine # Stable and slim PostgreSQL image
-        env:
+      - name: postgres-container # Name of the database container
+        image: postgres:13       # Example: PostgreSQL image version
+        imagePullPolicy: IfNotPresent # Pull from Docker Hub if not present
+        ports:
+        - containerPort: 5432    # Default PostgreSQL port
+        env: # Environment variables for PostgreSQL
         - name: POSTGRES_DB
           valueFrom:
             secretKeyRef:
-              name: todo-db-secret
+              name: todo-db-secret # Name of your Secret (from 01-db-secret.yaml)
               key: POSTGRES_DB
         - name: POSTGRES_USER
           valueFrom:
@@ -37,31 +35,55 @@ spec:
             secretKeyRef:
               name: todo-db-secret
               key: POSTGRES_PASSWORD
-        ports:
-        - containerPort: 5432
         volumeMounts:
-        - name: postgres-storage
+        - name: postgres-data
           mountPath: /var/lib/postgresql/data # Mount path for PostgreSQL data
+
+        # --- PROBES START HERE ---
+        # Liveness Probe: Checks if the container is still running and healthy
+        livenessProbe:
+          exec:
+            command:
+              - pg_isready
+              - -h
+              - localhost
+              - -U
+              - $(POSTGRES_USER) # Use environment variable from secret
+          initialDelaySeconds: 30 # Give DB time to start
+          periodSeconds: 10       # Check every 10 seconds
+          timeoutSeconds: 5
+          failureThreshold: 3
+
+        # Readiness Probe: Checks if the container is ready to accept traffic
+        readinessProbe:
+          exec:
+            command:
+              - pg_isready
+              - -h
+              - localhost
+              - -U
+              - $(POSTRES_USER) # Use environment variable from secret
+          initialDelaySeconds: 5  # Can be shorter than liveness
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 1
+
+        # Startup Probe (Optional but good for slow-starting apps):
+        # Checks if the container has started successfully before Liveness/Readiness probes kick in
+        # Requires Kubernetes 1.16+ (stable in 1.18+)
+        startupProbe:
+          exec:
+            command:
+              - pg_isready
+              - -h
+              - localhost
+              - -U
+              - $(POSTGRES_USER) # Use environment variable from secret
+          initialDelaySeconds: 5 # Start checking after 5 seconds
+          periodSeconds: 5       # Check every 5 seconds
+          failureThreshold: 30   # Allow 30 failures (150 seconds total) before restarting
+        # --- PROBES END HERE ---
       volumes:
-      - name: postgres-storage
+      - name: postgres-data
         persistentVolumeClaim:
-          claimName: todo-db-pvc # Link to our PVC
-      # Robust probes for database readiness and health
-      startupProbe: # Ensures the database container is fully initialized
-        exec:
-          command: ["pg_isready", "-U", "user", "-d", "todo_db"] # Using hardcoded user/db for probe, fine for assessment
-        initialDelaySeconds: 10
-        periodSeconds: 5
-        failureThreshold: 30 # Gives 2.5 minutes for DB to start (30 * 5s)
-      livenessProbe: # Checks if the DB is still running/responsive after startup
-        exec:
-          command: ["pg_isready", "-U", "user", "-d", "todo_db"]
-        initialDelaySeconds: 180 # Start after startupProbe and some buffer
-        periodSeconds: 10
-        failureThreshold: 3
-      readinessProbe: # Checks if the DB is ready to accept connections
-        exec:
-          command: ["pg_isready", "-U", "user", "-d", "todo_db"]
-        initialDelaySeconds: 20 # Can be ready earlier than live
-        periodSeconds: 5
-        failureThreshold: 3
+          claimName: todo-db-pvc # Must match the name of your PVC (from 02-db-pvc.yaml)
