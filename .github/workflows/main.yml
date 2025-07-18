@@ -3,48 +3,87 @@ name: CI with Minikube in GitHub Actions
 on:
   push:
     branches:
-      - master # Or main
+      - master # Or main, depending on your default branch
   pull_request:
     branches:
       - master # Or main
   workflow_dispatch:
 
+env:
+  # Define environment variables for consistency
+  IMAGE_NAME: my-app # This should match the image name you build in Dockerfile
+  K8S_NAMESPACE: todo-app-ns # The Kubernetes namespace defined in your manifests (e.g., in 00-namespace.yaml)
+
 jobs:
   build-and-test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest # GitHub Actions provides Ubuntu runners
 
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Set up Docker BuildX
+    - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
+      with:
+        driver: docker-container # IMPORTANT: This enables GHA caching
 
+    # Start Minikube directly on the GitHub Actions runner VM
     - name: Start Minikube
-      uses: medyagh/setup-minikube@latest # This action sets up Minikube on the runner VM
+      uses: medyagh/setup-minikube@latest
       with:
         minikube-version: 'latest' # Or a specific version like 'v1.32.0'
 
+    # Configure Docker to use Minikube's Docker daemon
     - name: Configure Docker to use Minikube's Docker daemon
       run: |
         eval $(minikube docker-env) # This command sets environment variables for Docker to use Minikube's daemon
 
+    # Build Docker image directly into Minikube's image cache
     - name: Build Docker image inside Minikube's Docker daemon
       run: |
-        docker build -t my-app:latest . # Builds image directly into Minikube's image cache
+        # The tag here (my-app:latest) must match the image: field in your deployment manifest
+        docker build -t ${{ env.IMAGE_NAME }}:latest .
 
+    # Deploy application to Minikube
     - name: Deploy to Minikube
       run: |
-        kubectl apply -f k8s/deployment.yaml # Your Kubernetes deployment manifest
-        kubectl apply -f k8s/service.yaml # Your Kubernetes service manifest
-        kubectl wait --for=condition=ready pod -l app=my-app --timeout=300s # Wait for pods to be ready
+        # No need for KUBECONFIG export here, as medyagh/setup-minikube sets it up
+        # The path 'kubernetes/' must exist and contain your YAML files.
+        # Ensure filenames match your actual files (e.g., 00-namespace.yaml, 01-db-secret.yaml etc.)
 
+        # Create/apply namespace first
+        kubectl apply -f kubernetes/00-namespace.yaml --namespace=${{ env.K8S_NAMESPACE }}
+
+        # Apply database related manifests
+        kubectl apply -f kubernetes/01-db-secret.yaml --namespace=${{ env.K8S_NAMESPACE }}
+        kubectl apply -f kubernetes/02-db-pvc.yaml --namespace=${{ env.K8S_NAMESPACE }}
+        kubectl apply -f kubernetes/03-db-deployment.yaml --namespace=${{ env.K8S_NAMESPACE }}
+        kubectl apply -f kubernetes/04-db-service.yaml --namespace=${{ env.K8S_NAMESPACE }}
+
+        # Apply application deployment and service
+        kubectl apply -f kubernetes/05-app-deployment.yaml --namespace=${{ env.K8S_NAMESPACE }}
+        kubectl apply -f kubernetes/06-app-service.yaml --namespace=${{ env.K8S_NAMESPACE }}
+        
+        # Patch the application deployment with the newly built image tag.
+        # Ensure 'todo-flask-app' matches the name of your Deployment resource (from 05-app-deployment.yaml)
+        # Ensure 'todo-flask-container' matches the name: of your container in the deployment (from 05-app-deployment.yaml)
+        # The image tag ${{ env.IMAGE_NAME }}:latest must match the one built above.
+        kubectl set image deployment/todo-flask-app \
+          todo-flask-container=${{ env.IMAGE_NAME }}:latest \
+          --namespace=${{ env.K8S_NAMESPACE }}
+        
+        # Wait for the deployment to roll out completely
+        kubectl rollout status deployment/todo-flask-app --namespace=${{ env.K8S_NAMESPACE }} --timeout=5m
+      if: success() # Only run this step if all previous steps succeeded
+
+    # Test Minikube Service Access (Internal to Runner)
     - name: Test Minikube Service Access (Internal to Runner)
       run: |
         # Get the NodePort URL for your service from the temporary Minikube
-        # Replace 'my-app-service' with the actual name of your Kubernetes service
-        SERVICE_URL=$(minikube service my-app-service --url)
+        # Replace 'my-flask-app-service' with the actual name of your Kubernetes Service (from 06-app-service.yaml)
+        SERVICE_URL=$(minikube service my-flask-app-service --url --namespace=${{ env.K8S_NAMESPACE }})
         echo "Service URL in Minikube: $SERVICE_URL"
         
         # Curl the service to ensure it's reachable and responding
-        curl --fail --show-error $SERVICE_URL
+        # Using a timeout for curl and retries for robustness in CI
+        curl -vvv --fail --show-error --retry 5 --retry-delay 5 $SERVICE_URL
