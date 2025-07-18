@@ -73,7 +73,7 @@ jobs:
         kubectl apply -f kubernetes/05-app-deployment.yaml --namespace=${{ env.K8S_NAMESPACE }}
         kubectl apply -f kubernetes/06-app-service.yaml --namespace=${{ env.K8S_NAMESPACE }}
         
-        # --- START DEBUGGING COMMANDS (VERY IMPORTANT FOR TROUBLESHOOTING ROLLOUT) ---
+        # --- START DEBUGGING COMMANDS FOR FLASK APP ---
         echo "--- Describing todo-flask-app Deployment ---"
         kubectl describe deployment todo-flask-app --namespace=${{ env.K8S_NAMESPACE }}
 
@@ -98,7 +98,30 @@ jobs:
         else
           echo "No 'todo-flask-app' pods found yet or pods are not in a Running/Pending/Error state for detailed description/logs."
         fi
-        echo "--- END DEBUGGING COMMANDS ---"
+        echo "--- END DEBUGGING COMMANDS FOR FLASK APP ---"
+
+        # --- START DEBUGGING COMMANDS FOR DATABASE ---
+        echo "--- Describing todo-db-deployment Deployment ---"
+        kubectl describe deployment todo-db-deployment --namespace=${{ env.K8S_NAMESPACE }}
+
+        echo "--- Getting Pods for todo-db-deployment ---"
+        kubectl get pods -l app=todo-db --namespace=${{ env.K8S_NAMESPACE }} -o wide
+
+        echo "--- Describing todo-db-deployment Pods (attempting to get details) ---"
+        DB_POD_NAME=$(kubectl get pods -l app=todo-db --namespace=${{ env.K8S_NAMESPACE }} -o jsonpath='{.items[0].metadata.name}' --field-selector=status.phase!=Succeeded,status.phase!=Failed --request-timeout=15s 2>/dev/null || echo "")
+
+        if [ -n "$DB_POD_NAME" ]; then
+          echo "Found DB pod: $DB_POD_NAME"
+          kubectl describe pod $DB_POD_NAME --namespace=${{ env.K8S_NAMESPACE }}
+          echo "--- Logs for todo-db-deployment Pod ($DB_POD_NAME) ---"
+          kubectl logs $DB_POD_NAME --namespace=${{ env.K8S_NAMESPACE }}
+          echo "--- Logs for previous instance of todo-db-deployment Pod ($DB_POD_NAME) (if available) ---"
+          kubectl logs $DB_POD_NAME --namespace=${{ env.K8S_NAMESPACE }} --previous || true
+        else
+          echo "No 'todo-db' pods found yet or pods are not in a Running/Pending/Error state for detailed description/logs."
+        fi
+        echo "--- END DEBUGGING COMMANDS FOR DATABASE ---"
+
 
         # Patch the application deployment with the newly built image tag.
         # 'todo-flask-app' is the Deployment name from 05-app-deployment.yaml
