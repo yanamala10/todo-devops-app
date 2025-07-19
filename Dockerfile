@@ -1,9 +1,13 @@
-# Use a suitable base image
-FROM python:3.9-slim-buster
+# Use a more recent, actively maintained Debian release as the base image.
+# 'bullseye' is Debian 11, 'bookworm' is Debian 12.
+# Using 'python:3.9-slim' without a specific Debian codename will usually
+# point to the latest slim image for Python 3.9 on a supported Debian.
+FROM python:3.9-slim # Changed from python:3.9-slim-buster
 
-# NEW: Install PostgreSQL client libraries (libpq-dev) and build essentials
-# This is often required for psycopg2 to function correctly, even for -binary versions.
+# Install PostgreSQL client libraries (libpq-dev) and build essentials
+# These are required for psycopg2 to function correctly, even for -binary versions.
 # --no-install-recommends helps keep the image size down.
+# Ensure apt-get update succeeds with the new base image.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     gcc \
