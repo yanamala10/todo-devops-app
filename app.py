@@ -2,11 +2,12 @@ import os
 from flask import Flask, jsonify, request
 import psycopg2
 from psycopg2 import sql
+import time # NEW: Import time module for sleep
+import sys  # NEW: Import sys module for exiting
 
 app = Flask(__name__)
 
 # Database connection details from environment variables
-# Default values are for local development with docker-compose
 DB_HOST = os.getenv('DB_HOST', 'localhost')
 DB_NAME = os.getenv('DB_NAME', 'todo_db')
 DB_USER = os.getenv('DB_USER', 'user')
@@ -14,6 +15,8 @@ DB_PASSWORD = os.getenv('DB_PASSWORD', 'password')
 
 def get_db_connection():
     """Establishes and returns a database connection."""
+    # NEW: For better debugging, print connection details here
+    print(f"Attempting to connect to DB: host={DB_HOST}, dbname={DB_NAME}, user={DB_USER}", flush=True)
     conn = psycopg2.connect(
         host=DB_HOST,
         database=DB_NAME,
@@ -23,21 +26,32 @@ def get_db_connection():
     return conn
 
 # Initialize database: creates the todos table if it doesn't exist
-def init_db():
+# NEW: Added retry logic and improved error handling
+def init_db(max_retries=10, retry_delay_seconds=5):
     conn = None
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute(sql.SQL('''CREATE TABLE IF NOT EXISTS todos (id SERIAL PRIMARY KEY,title VARCHAR(255) NOT NULL,completed BOOLEAN DEFAULT FALSE,created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP);'''))
-        conn.commit()
-        cur.close()
-        print("Database initialized successfully!")
-    except Exception as e:
-        print(f"Error initializing database: {e}")
-        # In a real app, you might want to log this error and potentially exit or retry
-    finally:
-        if conn:
-            conn.close()
+    for i in range(max_retries):
+        try:
+            print(f"Attempt {i+1}/{max_retries}: Initializing database...", flush=True)
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute(sql.SQL('''CREATE TABLE IF NOT EXISTS todos (id SERIAL PRIMARY KEY,title VARCHAR(255) NOT NULL,completed BOOLEAN DEFAULT FALSE,created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP);'''))
+            conn.commit()
+            cur.close()
+            print("Database initialized successfully!", flush=True)
+            return # Success, exit function
+        except psycopg2.OperationalError as e: # Catch specific connection errors
+            print(f"Database connection failed (OperationalError): {e}", flush=True)
+            print(f"Retrying in {retry_delay_seconds} seconds...", flush=True)
+            time.sleep(retry_delay_seconds)
+        except Exception as e:
+            print(f"Error initializing database (general exception): {e}", flush=True)
+            print("This is a critical error. Exiting application.", flush=True)
+            sys.exit(1) # Exit immediately if a non-operational error occurs
+        finally:
+            if conn:
+                conn.close()
+    print(f"Failed to initialize database after {max_retries} attempts. Exiting application.", flush=True)
+    sys.exit(1) # Exit if all retries fail
 
 # Route to check API health and DB connection
 @app.route('/health', methods=['GET'])
@@ -47,6 +61,7 @@ def health_check():
         conn.close()
         return jsonify({"status": "OK", "database_connection": "successful", "version": "1.3"}), 200
     except Exception as e:
+        # Capture more specific error in health check too
         return jsonify({"status": "ERROR", "database_connection": f"failed: {e}"}), 500
 
 # Get all todos
@@ -148,7 +163,7 @@ def delete_todo(todo_id):
 # Initialize database on application startup
 # Use app.app_context() to ensure we're within the Flask application context
 with app.app_context():
-    init_db()
+    init_db() # Call the init_db with retry logic
 
 if __name__ == '__main__':
     # When running locally via `python app.py`
