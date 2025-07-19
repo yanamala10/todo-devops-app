@@ -58,48 +58,49 @@ jobs:
 
     # Deploy application to Minikube
     - name: Deploy to Kubernetes
+      shell: bash # <--- ADDED THIS LINE: Explicitly use Bash for this run step
       run: |
         # No need for KUBECONFIG export here, as medyagh/setup-minikube action handles it.
         # Ensure these paths are correct relative to your project root.
         # They should point to files inside the 'kubernetes/' directory.
 
         # Apply manifests in the specified order (namespace first, then secrets, pvc, db, app)
-        kubectl apply -f kubernetes/00-namespace.yaml --namespace=${{ env.K8S_NAMESPACE }}
-        kubectl apply -f kubernetes/01-db-secret.yaml --namespace=${{ env.K8S_NAMESPACE }}
-        kubectl apply -f kubernetes/02-db-pvc.yaml --namespace=${{ env.K8S_NAMESPACE }}
-        kubectl apply -f kubernetes/03-db-deployment.yaml --namespace=${{ env.K8S_NAMESPACE }}
-        kubectl apply -f kubernetes/04-db-service.yaml --namespace=${{ env.K8S_NAMESPACE }}
+        kubectl apply -f kubernetes/00-namespace.yaml --namespace="${{ env.K8S_NAMESPACE }}"
+        kubectl apply -f kubernetes/01-db-secret.yaml --namespace="${{ env.K8S_NAMESPACE }}"
+        kubectl apply -f kubernetes/02-db-pvc.yaml --namespace="${{ env.K8S_NAMESPACE }}"
+        kubectl apply -f kubernetes/03-db-deployment.yaml --namespace="${{ env.K8S_NAMESPACE }}"
+        kubectl apply -f kubernetes/04-db-service.yaml --namespace="${{ env.K8S_NAMESPACE }}"
 
-        # --- NEW STEP: Wait for the database deployment to roll out completely ---
+        # --- Wait for the database deployment to roll out completely ---
         echo "--- Waiting for database deployment to be ready ---"
-        kubectl rollout status deployment/todo-db-deployment --namespace=${{ env.K8S_NAMESPACE }} --timeout=5m
+        kubectl rollout status deployment/todo-db-deployment --namespace="${{ env.K8S_NAMESPACE }}" --timeout=5m
         # --- END NEW STEP ---
 
-        kubectl apply -f kubernetes/05-app-deployment.yaml --namespace=${{ env.K8S_NAMESPACE }}
-        kubectl apply -f kubernetes/06-app-service.yaml --namespace=${{ env.K8S_NAMESPACE }}
+        kubectl apply -f kubernetes/05-app-deployment.yaml --namespace="${{ env.K8S_NAMESPACE }}"
+        kubectl apply -f kubernetes/06-app-service.yaml --namespace="${{ env.K8S_NAMESPACE }}"
         
         # --- START DEBUGGING COMMANDS FOR FLASK APP ---
         echo "--- Describing todo-flask-app Deployment ---"
-        kubectl describe deployment todo-flask-app --namespace=${{ env.K8S_NAMESPACE }}
+        kubectl describe deployment todo-flask-app --namespace="${{ env.K8S_NAMESPACE }}"
 
         echo "--- Getting Pods in todo-app-ns Namespace (all statuses) ---"
         # Get detailed pod info, including status, restarts, and ready state
-        kubectl get pods --namespace=${{ env.K8S_NAMESPACE }} -o wide
+        kubectl get pods --namespace="${{ env.K8S_NAMESPACE }}" -o wide
 
         echo "--- Describing todo-flask-app Pods (attempting to get details) ---"
         # Get the name of the 'todo-flask-app' pod(s). This might be tricky if it's crashing.
         # We try to get the first one, or just print a message if none found.
         # Using a timeout for 'get pods' to ensure it doesn't hang indefinitely if no pods appear.
-        POD_NAME=$(kubectl get pods -l app=todo-flask-app --namespace=${{ env.K8S_NAMESPACE }} -o jsonpath='{.items[0].metadata.name}' --field-selector=status.phase!=Succeeded,status.phase!=Failed --request-timeout=15s 2>/dev/null || echo "")
+        POD_NAME=$(kubectl get pods -l app=todo-flask-app --namespace="${{ env.K8S_NAMESPACE }}" -o jsonpath='{.items[0].metadata.name}' --field-selector=status.phase!=Succeeded,status.phase!=Failed --request-timeout=15s 2>/dev/null || echo "")
 
         if [ -n "$POD_NAME" ]; then
           echo "Found pod: $POD_NAME"
-          kubectl describe pod $POD_NAME --namespace=${{ env.K8S_NAMESPACE }}
+          kubectl describe pod "$POD_NAME" --namespace="${{ env.K8S_NAMESPACE }}"
           echo "--- Logs for todo-flask-app Pod ($POD_NAME) ---"
-          kubectl logs $POD_NAME --namespace=${{ env.K8S_NAMESPACE }}
+          kubectl logs "$POD_NAME" --namespace="${{ env.K8S_NAMESPACE }}"
           # Also get logs from previous instances if the pod is restarting (CrashLoopBackOff)
           echo "--- Logs for previous instance of todo-flask-app Pod ($POD_NAME) (if available) ---"
-          kubectl logs $POD_NAME --namespace=${{ env.K8S_NAMESPACE }} --previous || true
+          kubectl logs "$POD_NAME" --namespace="${{ env.K8S_NAMESPACE }}" --previous || true
         else
           echo "No 'todo-flask-app' pods found yet or pods are not in a Running/Pending/Error state for detailed description/logs."
         fi
@@ -107,21 +108,21 @@ jobs:
 
         # --- START DEBUGGING COMMANDS FOR DATABASE ---
         echo "--- Describing todo-db-deployment Deployment ---"
-        kubectl describe deployment todo-db-deployment --namespace=${{ env.K8S_NAMESPACE }}
+        kubectl describe deployment todo-db-deployment --namespace="${{ env.K8S_NAMESPACE }}"
 
         echo "--- Getting Pods for todo-db-deployment ---"
-        kubectl get pods -l app=todo-db --namespace=${{ env.K8S_NAMESPACE }} -o wide
+        kubectl get pods -l app=todo-db --namespace="${{ env.K8S_NAMESPACE }}" -o wide
 
         echo "--- Describing todo-db-deployment Pods (attempting to get details) ---"
-        DB_POD_NAME=$(kubectl get pods -l app=todo-db --namespace=${{ env.K8S_NAMESPACE }} -o jsonpath='{.items[0].metadata.name}' --field-selector=status.phase!=Succeeded,status.phase!=Failed --request-timeout=15s 2>/dev/null || echo "")
+        DB_POD_NAME=$(kubectl get pods -l app=todo-db --namespace="${{ env.K8S_NAMESPACE }}" -o jsonpath='{.items[0].metadata.name}' --field-selector=status.phase!=Succeeded,status.phase!=Failed --request-timeout=15s 2>/dev/null || echo "")
 
         if [ -n "$DB_POD_NAME" ]; then
           echo "Found DB pod: $DB_POD_NAME"
-          kubectl describe pod $DB_POD_NAME --namespace=${{ env.K8S_NAMESPACE }}
+          kubectl describe pod "$DB_POD_NAME" --namespace="${{ env.K8S_NAMESPACE }}"
           echo "--- Logs for todo-db-deployment Pod ($DB_POD_NAME) ---"
-          kubectl logs $DB_POD_NAME --namespace=${{ env.K8S_NAMESPACE }}
+          kubectl logs "$DB_POD_NAME" --namespace="${{ env.K8S_NAMESPACE }}"
           echo "--- Logs for previous instance of todo-db-deployment Pod ($DB_POD_NAME) (if available) ---"
-          kubectl logs $DB_POD_NAME --namespace=${{ env.K8S_NAMESPACE }} --previous || true
+          kubectl logs "$DB_POD_NAME" --namespace="${{ env.K8S_NAMESPACE }}" --previous || true
         else
           echo "No 'todo-db' pods found yet or pods are not in a Running/Pending/Error state for detailed description/logs."
         fi
@@ -133,10 +134,10 @@ jobs:
         # 'todo-flask-container' is the container 'name:' inside your 05-app-deployment.yaml
         kubectl set image deployment/todo-flask-app \
           todo-flask-container=${{ env.IMAGE_NAME }}:latest \
-          --namespace=${{ env.K8S_NAMESPACE }}
+          --namespace="${{ env.K8S_NAMESPACE }}"
         
         # Wait for the deployment to roll out completely
-        kubectl rollout status deployment/todo-flask-app --namespace=${{ env.K8S_NAMESPACE }} --timeout=5m
+        kubectl rollout status deployment/todo-flask-app --namespace="${{ env.K8S_NAMESPACE }}" --timeout=5m
       if: success() # Only run this step if all previous apply commands succeeded
 
     # Test Minikube Service Access (Internal to Runner)
@@ -144,10 +145,10 @@ jobs:
       run: |
         # Get the NodePort URL for your service from the temporary Minikube
         # Replace 'my-flask-app-service' with the actual name of your Kubernetes Service (from 06-app-service.yaml)
-        SERVICE_URL=$(minikube service my-flask-app-service --url --namespace=${{ env.K8S_NAMESPACE }})
+        SERVICE_URL=$(minikube service my-flask-app-service --url --namespace="${{ env.K8S_NAMESPACE }}")
         echo "Service URL in Minikube: $SERVICE_URL"
         
         # Curl the service to ensure it's reachable and responding
         # Using --retry and --retry-delay for robustness in CI as services might take a moment to be fully ready
-        curl -vvv --fail --show-error --retry 10 --retry-delay 5 $SERVICE_URL
+        curl -vvv --fail --show-error --retry 10 --retry-delay 5 "$SERVICE_URL"
       if: success() # Only run tests if deployment was successful
