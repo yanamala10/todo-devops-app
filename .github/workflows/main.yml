@@ -70,6 +70,11 @@ jobs:
         kubectl apply -f kubernetes/03-db-deployment.yaml --namespace=${{ env.K8S_NAMESPACE }}
         kubectl apply -f kubernetes/04-db-service.yaml --namespace=${{ env.K8S_NAMESPACE }}
 
+        # --- NEW STEP: Wait for the database deployment to roll out completely ---
+        echo "--- Waiting for database deployment to be ready ---"
+        kubectl rollout status deployment/todo-db-deployment --namespace=${{ env.K8S_NAMESPACE }} --timeout=5m
+        # --- END NEW STEP ---
+
         kubectl apply -f kubernetes/05-app-deployment.yaml --namespace=${{ env.K8S_NAMESPACE }}
         kubectl apply -f kubernetes/06-app-service.yaml --namespace=${{ env.K8S_NAMESPACE }}
         
