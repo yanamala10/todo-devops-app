@@ -1,6 +1,16 @@
 # Use a suitable base image
 FROM python:3.9-slim-buster
 
+# NEW: Install PostgreSQL client libraries (libpq-dev) and build essentials
+# This is often required for psycopg2 to function correctly, even for -binary versions.
+# --no-install-recommends helps keep the image size down.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq-dev \
+    gcc \
+    python3-dev \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
 # Set the working directory in the container
 WORKDIR /app
 
