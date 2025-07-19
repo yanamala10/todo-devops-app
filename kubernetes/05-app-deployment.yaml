@@ -22,17 +22,23 @@ spec:
         ports:
         - containerPort: 8080      # The port your Flask application listens on (e.g., Gunicorn bind port)
         env: # Environment variables for your Flask app to connect to the DB
-        # This will set the DATABASE_HOST environment variable in your Flask container
-        - name: DATABASE_HOST
+        # This will set the DB_HOST environment variable in your Flask container, matching app.py
+        - name: DB_HOST       # <--- CORRECTED NAME
           value: todo-db-service   # Name of your database Kubernetes Service (e.g., from 04-db-service.yaml)
-        # These will get DATABASE_USER from the todo-db-secret
-        - name: DATABASE_USER
+        # This will set the DB_NAME environment variable for app.py
+        - name: DB_NAME       # <--- NEW: Add this to pass the DB name
+          valueFrom:
+            secretKeyRef:
+              name: todo-db-secret
+              key: POSTGRES_DB # <--- ASSUMPTION: Your secret key for DB name. Verify this!
+        # These will get DB_USER from the todo-db-secret, matching app.py
+        - name: DB_USER       # <--- CORRECTED NAME
           valueFrom:
             secretKeyRef:
               name: todo-db-secret # <--- CORRECTED: This must match the name of your Secret
               key: POSTGRES_USER   # <--- CORRECTED: This must match the key in your Secret
-        # These will get DATABASE_PASSWORD from the todo-db-secret
-        - name: DATABASE_PASSWORD
+        # These will get DB_PASSWORD from the todo-db-secret, matching app.py
+        - name: DB_PASSWORD   # <--- CORRECTED NAME
           valueFrom:
             secretKeyRef:
               name: todo-db-secret # <--- CORRECTED: This must match the name of your Secret
