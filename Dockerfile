@@ -1,7 +1,7 @@
 # Use a more recent, actively maintained Debian release as the base image.
 # 'python:3.9-slim' should point to a version based on Bullseye (Debian 11) or Bookworm (Debian 12),
 # which have active repositories.
-FROM python:3.9-slim # <--- **THIS LINE MUST BE EXACTLY THIS**
+FROM python:3.9-slim # REMOVED INLINE COMMENT HERE
 
 # Install PostgreSQL client libraries (libpq-dev) and build essentials
 # These are required for psycopg2 to function correctly, even for -binary versions.
